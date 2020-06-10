@@ -2,6 +2,8 @@ module Tests
 
 open System
 open System
+open System.ComponentModel.DataAnnotations
+open System.ComponentModel.DataAnnotations
 open Xunit
 open Npgsql.FSharp
 open Microsoft.FSharp.Reflection
@@ -51,13 +53,13 @@ let defaultConnection  =
     |> Sql.port 5432
     |> Sql.username "postgres"
 
-type Event = {
+type EventDto = {
     Id: int
     Type: string
     Body: string
 }
 
-let getEvents (fromId: int) : Result<Event list, exn> =
+let getEvents (fromId: int) : Result<EventDto list, exn> =
     defaultConnection
         |> Sql.connectFromConfig
         |> Sql.query "select get_events(@fromId);"
@@ -129,6 +131,14 @@ module Result =
         match Decimal.TryParse(str) with
         | true, i -> i |> Ok
         | _ -> sprintf "Failed to parse int from %s" str |> Error
+        
+    let parseEnum<'T> str : 'T option = 
+        match Enum.TryParse(typeof<'T>, str) with
+        | true, e -> Some(downcast e)
+        | _ -> None
+        
+    let parseJson<'T> (str: string) : Result<'T, string> =
+        System.Text.Json.JsonSerializer.Deserialize<'T>(str) |> Ok
 
 
 type ShortString = private ShortString of string
@@ -148,6 +158,14 @@ module Id =
         if i < 1 then "Value must be a positive integer" |> Error
         else Id i |> Ok
     let toInt (Id i) = i
+
+type Json = private Json of string
+
+module Json =
+    let create str =
+        if String.IsNullOrEmpty(str)
+        then Error("Value can not be null or empty")
+        else Json str |> Ok
 
 module Map =
     let update: 'a -> ('b -> 'b) -> Map<'a, 'b> -> Map<'a, 'b> = fun key update map ->
@@ -215,6 +233,7 @@ module Dto =
         |> Map.map (fun k v -> Dto.Value v)
         |> Dto.Object
         
+let parseEnum<'T> s = Enum.TryParse
         
 type Amount = private Amount of decimal
 
@@ -237,7 +256,59 @@ module Account =
         | Debited of DebitedAccountEvent
         | Transferred of TransferredFundsEvent
         | Closed of ClosedAccountEvent
+        
+    let CreatedEventTye = ""
     
+    module Dto =
+        type EventType =
+            | Created
+            | Credited
+            | Debited
+            | Transferred
+            | Closed
+            
+        type CreatedAccountEvent = {
+            [<RegularExpression("^Created$")>]
+            Type: EventType
+            Id: int }
+        type CreditedAccountEvent = {
+            [<RegularExpression("^Credited$")>]
+            Type: EventType
+            Id: int
+            Amount: decimal
+        }
+        type DebitedAccountEvent = { Type: EventType; Id: int; Amount: decimal }
+        type TransferredFundsEvent = { Type: EventType; FromId: int; ToId: int; Amount: decimal; }
+        type ClosedAccountEvent = { Type: EventType; Id: int }
+    
+        let fromDto: EventType -> string -> Result<Event, string> = fun eventType json ->
+            match eventType with
+            | Created -> result {
+                let! dto = Result.parseJson<CreatedAccountEvent> json
+                let id = dto.Id
+                return Event.Created({ Id = id })}
+            | Credited -> result {
+                let! dto = Result.parseJson<CreditedAccountEvent> json
+                let id = dto.Id
+                let amount = dto.Amount
+                return Event.Credited({ Id = id; Amount = amount })}
+            | Debited -> result {
+                let! dto = Result.parseJson<DebitedAccountEvent> json
+                let id = dto.Id
+                let amount = dto.Amount
+                return Event.Debited({ Id = id; Amount = amount })}
+            | Transferred -> result {
+                let! dto = Result.parseJson<TransferredFundsEvent> json
+                let fromId = dto.FromId
+                let toId = dto.ToId
+                let amount = dto.Amount
+                return Event.Transferred({ FromId = fromId; ToId = toId; Amount = amount })}
+            | Closed -> result {
+                let! dto = Result.parseJson<ClosedAccountEvent> json
+                let id = dto.Id
+                return Event.Closed({ Id = id })
+            }
+            
     let private getId = Dto.get "Id" Dto.toInt
     let private getAmount = Dto.get "Amount" Dto.toDecimal 
     
@@ -364,11 +435,16 @@ module Account =
         then Ok(id)
         else Error("Account id not found")
 
-    let reducer: Reducer<State, Event> = fun state event ->
-        { state with
-            Balances = GetBalance.reducer state.Balances event }
+    let reducer: Reducer<State, Event> = fun state event -> {
+        Active = GetActive.reducer state.Active event
+        Balances = GetBalance.reducer state.Balances event
+        NextId = GetNextId.reducer state.NextId event }
+
+    let reducerDto: Reducer<State, Event> -> Reducer<State, EventDto> = fun reducer ->
+        fun state eventDto ->
+            state
         
-module Overdraft =
+module Overdraft = 
     type Event =
         | Extended of int * decimal
         | ChargedFee of int * decimal
@@ -376,17 +452,28 @@ module Overdraft =
     type State = Map<int, decimal>
     
 module AccountManager =
-    type TransferFundsCommand = {
-        FromAccountId: Account.Id
-        ToAccountId: Account.Id
-        Amount: decimal }
+    type TransferFundsCommand = { FromAccountId: Account.Id; ToAccountId: Account.Id; Amount: decimal }
     
     type Command =
         | OpenAccount
         | TransferFunds of TransferFundsCommand
         | CloseAccount of Account.Id
-        with
-            static member from (o: Object) = None 
+        
+    module Dto =
+        type OpenAccount = {
+            [<RegularExpression("^OpenAccount$")>]
+            Type: string; }
+        type TransferFunds = {
+            [<RegularExpression("^Transfer$")>]
+            Type: string;
+            FromAccountId: Account.Id
+            ToAccountId: Account.Id
+            Amount: decimal }
+        type CloseAccount = {
+            [<RegularExpression("^CloseAccount$")>]
+            Type: string;
+            Id: int
+        }
         
     type State = Account.State * Overdraft.State
     
@@ -417,14 +504,25 @@ type Customer = {
     Name: string
     Age: int }
 
+module Customer =
+    type State = int
+    
+module CreditFile =
+    type State = int
+    
+    
+
 type CreditFile = {
     CustomerId: int
     Score: float }
 
 type State = {
-    Accounts:  Map<int, int> }
+    Accounts:  Account.State
+    Customers: Customer.State
+    CreditFiles: CreditFile.State }
 
-type Reducer = State -> Object -> State
+type Reducer = State -> EventDto -> State
+
 
 type Reducer<'Event> = State -> 'Event -> State
 
@@ -450,4 +548,17 @@ let ``Serialize / deserialize test`` () =
     dtob |> should equal dto
     let eventb = Account.deserialize dtob "Credited"
     eventb |> should equal (Result<Account.Event, string>.Ok(event))
+
+[<Fact>]
+let ``Parse enum`` () =
+    let x = Enum.Parse(typeof<Account.Dto.EventType>, "Closed")
+    x |> should equal Account.Dto.EventType.Closed
+    
+open Newtonsoft.Json.Schema.Generation
+
+[<Fact>]
+let ``Nuget`` () =
+    let generator = JSchemaGenerator()
+    let schema = generator.Generate(typeof<Account.Dto.ClosedAccountEvent>)
+    schema |> should equal ""
     

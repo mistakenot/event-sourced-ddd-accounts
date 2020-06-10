@@ -10,8 +10,8 @@ type BalanceAmount = private Amount of decimal
 
 module BalanceAmount =
     let create d =
-        if d <= 1_000_000_000m then sprintf "Value %f is out of range" d |> Error
-        else if d >= 1_000_000_000m then sprintf "Value %f is out of range" d |> Error 
+        if d <= -1_000_000_000m then sprintf "Value %f should be greater than -1,000,000,000" d |> Error
+        else if d >= 1_000_000_000m then sprintf "Value %f should be less than 1,000,000,000" d |> Error 
         else Amount d |> Ok
         
     let cast = create >> Result.unwrap
@@ -25,13 +25,21 @@ module AccountId =
     let create accountIds i =
         if Set.contains i accountIds then AccountId(i) |> Ok
         else sprintf "Account ID %O does not exist" i |> Error
+        
+    let cast = IntId.cast >> AccountId
+        
+    let fromInt (state: Set<int>) i = result {
+        let! id = IntId.create i
+        let! accountId = create (state |> Set.map IntId.cast) id
+        return accountId
+    }
 
 module Account = 
-    type CreatedAccountEvent = { Id: IntId; }
-    type CreditedAccountEvent = { Id: AccountId; Amount: BalanceAmount }
-    type DebitedAccountEvent = { Id: AccountId; Amount: BalanceAmount }
-    type TransferredFundsEvent = { FromId: AccountId; ToId: AccountId; Amount: BalanceAmount; }
-    type ClosedAccountEvent = { Id: AccountId }
+    type CreatedAccountEvent = { AccountId: IntId; }
+    type CreditedAccountEvent = { AccountId: AccountId; Amount: BalanceAmount }
+    type DebitedAccountEvent = { AccountId: AccountId; Amount: BalanceAmount }
+    type TransferredFundsEvent = { FromAccountId: AccountId; ToAccountId: AccountId; Amount: BalanceAmount; }
+    type ClosedAccountEvent = { AccountId: AccountId }
 
     type Event =
         | Created of CreatedAccountEvent
@@ -48,18 +56,18 @@ module Account =
         let private transfer e =
             let update id balance =
                 match id with
-                | id when id = e.FromId.ToInt() -> balance - e.Amount.ToDecimal()
-                | id when id = e.ToId.ToInt() -> balance + e.Amount.ToDecimal()
+                | id when id = e.FromAccountId.ToInt() -> balance - e.Amount.ToDecimal()
+                | id when id = e.ToAccountId.ToInt() -> balance + e.Amount.ToDecimal()
                 | _ -> balance
             Map.map update
         
         let reducer: Reducer<State, Event> = fun state ->
             function
-            | Created e -> Map.add (e.Id.ToInt()) 0m state
-            | Credited e -> Map.update (e.Id.ToInt()) ((+) (e.Amount.ToDecimal())) state
-            | Debited e -> Map.update (e.Id.ToInt()) ((-) (e.Amount.ToDecimal())) state
+            | Created e -> Map.add (e.AccountId.ToInt()) 0m state
+            | Credited e -> Map.update (e.AccountId.ToInt()) ((+) (e.Amount.ToDecimal())) state
+            | Debited e -> Map.update (e.AccountId.ToInt()) ((-) (e.Amount.ToDecimal())) state
             | Transferred e -> transfer e state
-            | Closed e -> Map.remove (e.Id.ToInt()) state
+            | Closed e -> Map.remove (e.AccountId.ToInt()) state
             
         let empty: State = Map.empty
                 
@@ -89,7 +97,7 @@ module Account =
             | Transferred e -> state
             | Closed e -> state
             
-        let empty: State = 0
+        let empty: State = 1
 
     module GetActive =
         let name = "GetActive"
@@ -98,11 +106,11 @@ module Account =
         
         let reducer: Reducer<State, Event> = fun state ->
             function
-            | Created e -> Set.add (e.Id.ToInt()) state
+            | Created e -> Set.add (e.AccountId.ToInt()) state
             | Credited e -> state
             | Debited e -> state
             | Transferred e -> state
-            | Closed e -> Set.remove (e.Id.ToInt()) state
+            | Closed e -> Set.remove (e.AccountId.ToInt()) state
             
         let empty: State = Set.empty
 
@@ -110,11 +118,12 @@ module Account =
         Active: GetActive.State
         Balances: GetBalance.State
         NextId: GetNextId.State }
-
-    let empty: State = {
-        Active = GetActive.empty
-        Balances = GetBalance.empty
-        NextId = GetNextId.empty }
+    
+    module State =
+        let empty: State = {
+            Active = GetActive.empty
+            Balances = GetBalance.empty
+            NextId = GetNextId.empty }
 
     let getBalance (id: AccountId) (state: State) = Map.find (id.ToInt()) state.Balances |> BalanceAmount.cast
         
@@ -191,38 +200,44 @@ module Account =
             | CreatedAccountEventType -> result {
                 let! dto = Result.parseJson<CreatedAccountEvent> json
                 let! id = dto.Id |> IntId.create
-                return Event.Created({ Id = id })}
+                return Event.Created({ AccountId = id })}
             | CreditedAccountEventType -> result {
                 let! dto = Result.parseJson<CreditedAccountEvent> json
                 let! id = accountId dto.Id
                 let! amount = dto.Amount |> BalanceAmount.create
-                return Event.Credited({ Id = id; Amount = amount })}
+                return Event.Credited({ AccountId = id; Amount = amount })}
             | DebitedAccountEventType -> result {
                 let! dto = Result.parseJson<DebitedAccountEvent> json
                 let! id = accountId dto.Id
                 let! amount = dto.Amount |> BalanceAmount.create
-                return Event.Debited({ Id = id; Amount = amount })}
+                return Event.Debited({ AccountId = id; Amount = amount })}
             | TransferredFundsEventType -> result {
                 let! dto = Result.parseJson<TransferredFundsEvent> json
                 let! fromId = accountId dto.FromId
                 let! toId = accountId dto.ToId
                 let! amount = dto.Amount |> BalanceAmount.create
-                return Event.Transferred({ FromId = fromId; ToId = toId; Amount = amount })}
+                return Event.Transferred({ FromAccountId = fromId; ToAccountId = toId; Amount = amount })}
             | ClosedAccountEventType -> result {
                 let! dto = Result.parseJson<ClosedAccountEvent> json
                 let! id = accountId dto.Id
-                return Event.Closed({ Id = id })}
+                return Event.Closed({ AccountId = id })}
             | _ -> Error("Invalid event type")
             
-        let toDto: Event -> (EventType * Dto) =
+        let toDto: Event -> (EventType * Dto) = 
             function
-            | Event.Created(e) -> CreatedAccountEventType, Created({ Type = CreatedAccountEventType; Id = IntId.toInt e.Id })
-            | Event.Credited(e) -> CreditedAccountEventType, Credited({ Type = CreditedAccountEventType; Id = e.Id.ToInt(); Amount = e.Amount.ToDecimal() })
-            | Event.Debited(e) -> DebitedAccountEventType, Debited({ Type = DebitedAccountEventType; Id = e.Id.ToInt(); Amount = e.Amount.ToDecimal() })
-            | Event.Transferred(e) -> TransferredFundsEventType, Transferred({ Type = TransferredFundsEventType; FromId = e.FromId.ToInt(); ToId = e.ToId.ToInt(); Amount = e.Amount.ToDecimal() })
-            | Event.Closed(e) -> ClosedAccountEventType, Closed({ Type = ClosedAccountEventType; Id = e.Id.ToInt() })
+            | Event.Created(e) -> CreatedAccountEventType, Created({ Type = CreatedAccountEventType; Id = IntId.toInt e.AccountId })
+            | Event.Credited(e) -> CreditedAccountEventType, Credited({ Type = CreditedAccountEventType; Id = e.AccountId.ToInt(); Amount = e.Amount.ToDecimal() })
+            | Event.Debited(e) -> DebitedAccountEventType, Debited({ Type = DebitedAccountEventType; Id = e.AccountId.ToInt(); Amount = e.Amount.ToDecimal() })
+            | Event.Transferred(e) -> TransferredFundsEventType, Transferred({ Type = TransferredFundsEventType; FromId = e.FromAccountId.ToInt(); ToId = e.ToAccountId.ToInt(); Amount = e.Amount.ToDecimal(); })
+            | Event.Closed(e) -> ClosedAccountEventType, Closed({ Type = ClosedAccountEventType; Id = e.AccountId.ToInt() })
             
-        let serialize: Dto -> EventDto = failwith "Not impl"
+        let serialize: int -> Dto -> EventDto = fun eventId -> 
+            function
+            | Created(e) -> { Type = CreatedAccountEventType; Body = Json.str e; Id = eventId }
+            | Credited(e) -> { Type = CreditedAccountEventType; Body = Json.str e; Id = eventId }
+            | Debited(e) -> { Type = DebitedAccountEventType; Body = Json.str e; Id = eventId }
+            | Transferred(e) -> { Type = TransferredFundsEventType; Body = Json.str e; Id = eventId }
+            | Closed(e) -> { Type = ClosedAccountEventType; Body = Json.str e; Id = eventId }
     
 module AccountManager =
     type TransferFundsCommand = { FromAccountId: AccountId; ToAccountId: AccountId; Amount: BalanceAmount }
@@ -232,30 +247,52 @@ module AccountManager =
         | TransferFunds of TransferFundsCommand
         | CloseAccount of AccountId
         
-    module Dto =
-        type OpenAccount = {
-            [<RegularExpression("^OpenAccount$")>]
-            Type: string; }
-        type TransferFunds = {
-            [<RegularExpression("^Transfer$")>]
-            Type: string;
-            FromAccountId: AccountId
-            ToAccountId: AccountId
-            Amount: decimal }
-        type CloseAccount = {
-            [<RegularExpression("^CloseAccount$")>]
-            Type: string;
-            Id: int
-        }
-        
-        let deserialize: CommandDto -> Result<Command, string> = failwith "not impl"
-        let serialize: Command -> CommandDto = failwith "not impl"
-        
     type State = Account.State
+        
+    module Dto =
+        [<Literal>]
+        let OpenAccountCommandType = "OpenAccount"
+        type OpenAccount = {
+            [<RegularExpression("^" + OpenAccountCommandType + "$")>]
+            Type: string; }
+        
+        [<Literal>]
+        let TransferFundsCommandType = "TransferFunds"
+        type TransferFunds = {
+            [<RegularExpression("^" + TransferFundsCommandType + "$")>]
+            Type: string;
+            FromAccountId: int
+            ToAccountId: int
+            Amount: decimal }
+        
+        [<Literal>]
+        let CloseAccountCommandType = "CloseAccount"
+        type CloseAccount = {
+            [<RegularExpression("^" + CloseAccountCommandType + "$")>]
+            Type: string;
+            Id: int }
+        
+        let deserialize: State -> CommandDto -> Result<Command, string> = fun state dto ->
+            let accountId = AccountId.fromInt state.Active
+            match dto.Type with
+            | OpenAccountCommandType -> result {
+                let! command = Json.deserialize<OpenAccount> dto.Body
+                return Command.OpenAccount }
+            | TransferFundsCommandType -> result {
+                let! command = Json.deserialize<TransferFunds> dto.Body
+                let! fromId = accountId command.FromAccountId
+                let! toId = accountId command.ToAccountId
+                let! amount = BalanceAmount.create command.Amount
+                return Command.TransferFunds({ FromAccountId = fromId; ToAccountId = toId; Amount =  amount }) }
+            | CloseAccountCommandType -> result {
+                let! command = Json.deserialize<CloseAccount> dto.Body
+                let! id = accountId command.Id
+                return Command.CloseAccount id }
+            | _ -> Handler.notHandled
     
     let private openAccount (id: int) = result {
         let! intId = IntId.create id
-        return Account.Event.Created { Id = intId }
+        return Account.Event.Created { AccountId = intId }
     }
     
     let private transferFunds command accounts = result {
@@ -265,19 +302,19 @@ module AccountManager =
         if command.Amount >= fromBalance then
             return! Error("Not enough funds")
         else
-            return Account.Event.Transferred { FromId = command.FromAccountId; ToId = command.ToAccountId; Amount = command.Amount }
+            return Account.Event.Transferred { FromAccountId = command.FromAccountId; ToAccountId = command.ToAccountId; Amount = command.Amount }
     }
     
-    let private closeAccount (id: AccountId) state = Account.Event.Closed { Id = id } |> Ok
+    let private closeAccount (id: AccountId) state = Account.Event.Closed { AccountId = id } |> Ok
     
-    let private _handler: Handler<State, Command, Account.Event> = fun accounts -> function
+    let _handler: Handler<State, Command, Account.Event> = fun accounts -> function
         | OpenAccount -> openAccount accounts.NextId
         | TransferFunds id -> transferFunds id accounts
         | CloseAccount id -> closeAccount id accounts
         
     let handler: Handler<State, CommandDto, EventDto> = fun state dto -> result {
-        let! command = Dto.deserialize dto
+        let! command = Dto.deserialize state dto
         let! event = _handler state command
         let (_, eventDto) = Account.Dto.toDto event
-        return Account.Dto.serialize eventDto
+        return Account.Dto.serialize state.NextId eventDto 
     }

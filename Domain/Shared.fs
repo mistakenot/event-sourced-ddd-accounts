@@ -8,7 +8,6 @@ type EventDto = {
     Body: string }
 
 type CommandDto = {
-    Id: string
     Type: string
     Body: string }
 
@@ -122,11 +121,11 @@ module ShortString =
 type IntId = private IntId of int
     with
         member this.ToInt() = match this with | IntId(i) -> i
-        member this.ToString() = this.ToInt().ToString()
+        override this.ToString() = this.ToInt().ToString()
 
 module IntId =
     let create i =
-        if i < 1 then "Id value must be a positive integer" |> Error
+        if i < 1 then sprintf "Id value %O must be a positive integer" i |> Error
         else IntId i |> Ok
         
     let cast = create >> Result.unwrap
@@ -134,12 +133,33 @@ module IntId =
     let toInt (i: IntId) = i.ToInt()
 
 type Json = private Json of string
+    with member this.ToString() = match this with | Json(s) -> s
 
 module Json =
+    open System.Text.Json
+    open FSharp.Json
+    
     let create str =
         if String.IsNullOrEmpty(str)
         then Error("Value can not be null or empty")
         else Json str |> Ok
+        
+    let serialize obj = Json.serialize obj |> Json
+    
+    let private _deserialize<'a> obj =
+        try
+            Json.deserialize<'a> obj |> Ok
+        with
+        | :? JsonDeserializationError as e -> Error(e.Message)
+    
+    let deserialize<'a> str = result {
+        let! json = create str
+        let! a = _deserialize<'a>(json.ToString())
+        return a
+    }
+    
+    let str: obj -> string = serialize >> function | Json(s) -> s
+    
 
 module Map =
     let update: 'a -> ('b -> 'b) -> Map<'a, 'b> -> Map<'a, 'b> = fun key update map ->

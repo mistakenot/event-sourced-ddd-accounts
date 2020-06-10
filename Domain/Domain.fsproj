@@ -16,6 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="FSharp.Json" Version="0.4.0" />
     <PackageReference Include="FsUnit.xUnit" Version="3.8.1" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="16.2.0" />
     <PackageReference Include="Newtonsoft.Json.Schema" Version="3.0.13" />

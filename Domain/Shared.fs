@@ -63,9 +63,6 @@ module Result =
         | true, e -> Some(downcast e)
         | _ -> None
         
-    let parseJson<'T> (str: string) : Result<'T, string> =
-        System.Text.Json.JsonSerializer.Deserialize<'T>(str) |> Ok
-        
     let unwrap =
         function
         | Ok(r) -> r
@@ -133,7 +130,7 @@ module IntId =
     let toInt (i: IntId) = i.ToInt()
 
 type Json = private Json of string
-    with member this.ToString() = match this with | Json(s) -> s
+    with override this.ToString() = match this with | Json(s) -> s
 
 module Json =
     open System.Text.Json

@@ -1,0 +1,85 @@
+@page "/accounts"
+
+@using Web.Data
+@using Shared = global::Shared
+@inject IStateRepository StateService
+@inject CommandPostbox CommandPostbox
+
+<h1>Accounts</h1>
+
+<p>Account data <i>@message</i></p>
+
+<p>
+    <button class="btn btn-primary" @onclick="NewAccount">New Account</button>
+</p>
+
+@if (state == null)
+{
+    <p><em>Loading...</em></p>
+}
+else
+{
+    <table class="table">
+        <thead>
+        <tr>
+            <th>Id</th>
+            <th>Balance</th>
+            <th>Credit</th>
+            <th>Transfer</th>
+        </tr>
+        </thead>
+        <tbody>
+        @foreach (var (accountId, balance) in state.Accounts.Balances)
+        {
+            <tr>
+                <td>@accountId</td>
+                <td>£@balance</td>
+                <td>
+                    <button class="btn btn-outline-primary" @onclick="() => Credit(accountId)">Credit £100</button>
+                </td>
+                <td>
+                    <button class="btn btn-outline-primary" @onclick="() => Transfer(accountId, 1)">Transfer £100</button>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}
+
+@code {
+    private Domain.State state;
+    private string message = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        state = await StateService.Get();
+    }
+
+    private async Task NewAccount()
+    {
+        var command = new Shared.CommandDto("OpenAccount", @"{""Type"": ""OpenAccount""}");
+        message = await CommandPostbox.Post(command);
+        state = await StateService.Get();
+        StateHasChanged();
+    }
+
+    private async Task Credit(int accountId)
+    {
+        var command = new {Type = "CreditFunds", Amount = 100m, ToAccountId = accountId};
+        var body = System.Text.Json.JsonSerializer.Serialize(command);
+        var dto = new Shared.CommandDto($"CreditFunds", body);
+        message = await CommandPostbox.Post(dto);
+        state = await StateService.Get();
+        StateHasChanged();
+    }
+    
+    private async Task Transfer(int fromId, int toId)
+    {
+        var command = new {Type = "TransferFunds", Amount = 100m, FromAccountId = fromId, ToAccountId = toId};
+        var body = System.Text.Json.JsonSerializer.Serialize(command);
+        var dto = new Shared.CommandDto($"TransferFunds", body);
+        message = await CommandPostbox.Post(dto);
+        state = await StateService.Get();
+        StateHasChanged();
+    }
+}

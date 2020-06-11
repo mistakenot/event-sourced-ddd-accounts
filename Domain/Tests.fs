@@ -93,24 +93,24 @@ let ``AccountManager deserialize`` () =
         actual |> should equal cmd
 
 let run commands =
-    let rec loop state commands events = 
+    let rec loop state commands events errors = 
         match commands with
         | c::tail ->
             match _handler state c with
             | Ok(e) ->
-                let nextState = Account.reducer state e
-                loop nextState tail (events @ [e])
-            | Error(e) -> failwith (e.ToString()) 
-        | [] -> state, events
+                let nextState = Account._reducer state e
+                loop nextState tail (events @ [e]) errors
+            | Error(e) -> loop state tail events (errors @ [e])
+        | [] -> state, events, errors
         
-    loop Account.State.empty commands []
+    loop Account.State.empty commands [] []
     
 [<Fact>]
 let ``AccountManager handler`` () =
     let commands: Command list = [
         Command.OpenAccount
         Command.OpenAccount
-        // Command.TransferFunds({FromAccountId = 1 |> AccountId.cast; ToAccountId = AccountId.cast 2; Amount = BalanceAmount.cast 0m})
+        Command.TransferFunds({FromAccountId = 1 |> AccountId.cast; ToAccountId = AccountId.cast 2; Amount = BalanceAmount.cast 0m})
     ]
     
     let expectedEvents: Account.Event list = [
@@ -123,7 +123,8 @@ let ``AccountManager handler`` () =
             Balances = Map.ofSeq [(1, 0m); (2, 0m)]
             NextId = 3 }
     
-    let (state, events) = run commands
+    let (state, events, errors) = run commands
     
     events |> should equal expectedEvents
     state |> should equal expectedState
+    errors |> should equal ["Not enough funds"]

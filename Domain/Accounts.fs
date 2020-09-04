@@ -148,8 +148,7 @@ module Account =
             [<RegularExpression("^" + CreditedAccountEventType + "$")>]
             Type: EventType
             Id: int
-            Amount: decimal
-        }
+            Amount: decimal }
         
         [<Literal>]
         let DebitedAccountEventType = "DebitedAccount"
@@ -157,8 +156,7 @@ module Account =
             [<RegularExpression("^" + DebitedAccountEventType + "$")>]
             Type: EventType
             Id: int
-            Amount: decimal
-        }
+            Amount: decimal }
         
         [<Literal>]
         let TransferredFundsEventType = "TransferredFunds"
@@ -167,16 +165,14 @@ module Account =
             Type: EventType
             FromId: int
             ToId: int
-            Amount: decimal;
-        }
+            Amount: decimal; }
         
         [<Literal>]
         let ClosedAccountEventType = "ClosedAccount"
         type ClosedAccountEvent = {
             [<RegularExpression("^" + ClosedAccountEventType + "$")>]
             Type: EventType
-            Id: int
-        }
+            Id: int }
         
         type Dto = Created of CreatedAccountEvent | Credited of CreditedAccountEvent | Debited of DebitedAccountEvent | Transferred of TransferredFundsEvent | Closed of ClosedAccountEvent
 
@@ -335,7 +331,9 @@ module AccountManager =
         let fromBalance = Account.getBalance command.FromAccountId accounts
         let toBalance = Account.getBalance command.ToAccountId accounts
         
-        if command.Amount > fromBalance then
+        if command.FromAccountId = command.ToAccountId then
+            return! Error("Can not transfer to your own account")
+        else if command.Amount > fromBalance then
             return! Error("Not enough funds")
         else
             return Account.Event.Transferred { FromAccountId = command.FromAccountId; ToAccountId = command.ToAccountId; Amount = command.Amount }
@@ -366,5 +364,4 @@ module AccountManager =
         let! command = Dto.deserialize state dto
         let! event = _handler state command
         let (_, eventDto) = Account.Dto.toDto event
-        return Account.Dto.serialize nextId eventDto 
-    }
+        return Account.Dto.serialize nextId eventDto }
